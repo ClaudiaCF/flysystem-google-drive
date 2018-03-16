@@ -15,18 +15,18 @@ class GoogleDriveAdapter extends AbstractAdapter
 {
 
     /**
+     * Fetch fields setting for list
+     *
+     * @var string
+     */
+    const FETCHFIELDS_LIST = 'files(id,mimeType,modifiedTime,name,parents,permissions,size,webContentLink,webViewLink),nextPageToken';
+
+    /**
      * Fetch fields setting for get
      *
      * @var string
      */
     const FETCHFIELDS_GET = 'id,name,mimeType,modifiedTime,parents,permissions,size,webContentLink,webViewLink';
-
-    /**
-     * Fetch fields setting for list
-     *
-     * @var string
-     */
-    const FETCHFIELDS_LIST = 'files(FETCHFIELDS_GET),nextPageToken';
 
     /**
      * MIME tyoe of directory
@@ -50,7 +50,6 @@ class GoogleDriveAdapter extends AbstractAdapter
     protected static $defaultOptions = [
         'spaces' => 'drive',
         'useHasDir' => false,
-        'additionalFetchField' => '',
         'publishPermission' => [
             'type' => 'anyone',
             'role' => 'reader',
@@ -103,27 +102,6 @@ class GoogleDriveAdapter extends AbstractAdapter
     private $useHasDir = false;
 
     /**
-     * List of fetch field for get
-     *
-     * @var string
-     */
-    private $fetchfieldsGet = '';
-
-    /**
-     * List of fetch field for lest
-     *
-     * @var string
-     */
-    private $fetchfieldsList = '';
-
-    /**
-     * Additional fetch fields array
-     *
-     * @var array
-     */
-    private $additionalFields = [];
-
-    /**
      * Options array
      *
      * @var array
@@ -144,23 +122,6 @@ class GoogleDriveAdapter extends AbstractAdapter
         $this->spaces = $this->options['spaces'];
         $this->useHasDir = $this->options['useHasDir'];
         $this->publishPermission = $this->options['publishPermission'];
-
-        $this->fetchfieldsGet = self::FETCHFIELDS_GET;
-        if ($this->options['additionalFetchField']) {
-             $this->fetchfieldsGet .= ',' . $this->options['additionalFetchField'];
-             $this->additionalFields = explode(',', $this->options['additionalFetchField']);
-        }
-        $this->fetchfieldsList = str_replace('FETCHFIELDS_GET', $this->fetchfieldsGet, self::FETCHFIELDS_LIST);
-    }
-
-    /**
-     * Gets the service (Google_Service_Drive)
-     *
-     * @return object  Google_Service_Drive
-     */
-    public function getService()
-    {
-        return $this->service;
     }
 
     /**
@@ -239,7 +200,7 @@ class GoogleDriveAdapter extends AbstractAdapter
         $file = new Google_Service_Drive_DriveFile();
         $file->setName($newName);
         $opts = [
-            'fields' => $this->fetchfieldsGet
+            'fields' => self::FETCHFIELDS_GET
         ];
         if ($newParent !== $oldParent) {
             $opts['addParents'] = $newParent;
@@ -278,7 +239,7 @@ class GoogleDriveAdapter extends AbstractAdapter
         ]);
 
         $newFile = $this->service->files->copy($srcId, $file, [
-            'fields' => $this->fetchfieldsGet
+            'fields' => self::FETCHFIELDS_GET
         ]);
 
         if ($newFile instanceof Google_Service_Drive_DriveFile) {
@@ -424,16 +385,9 @@ class GoogleDriveAdapter extends AbstractAdapter
             if ($file = $this->getFileObject($path)) {
                 $dlurl = $this->getDownloadUrl($file);
                 $client = $this->service->getClient();
-                if ($client->isUsingApplicationDefaultCredentials()) {
-                    $token = $client->fetchAccessTokenWithAssertion();
-                } else {
-                    $token = $client->getAccessToken();
-                }
+                $token = $client->getAccessToken();
                 $access_token = '';
                 if (is_array($token)) {
-                    if (empty($token['access_token']) && !empty($token['refresh_token'])) {
-                        $token = $client->fetchAccessTokenWithRefreshToken();
-                    }
                     $access_token = $token['access_token'];
                 } else {
                     if ($token = @json_decode($client->getAccessToken())) {
@@ -504,6 +458,7 @@ class GoogleDriveAdapter extends AbstractAdapter
                 return compact('stream');
             }
         }
+
         return false;
     }
 
@@ -828,6 +783,7 @@ class GoogleDriveAdapter extends AbstractAdapter
         $result['type'] = $object->mimeType === self::DIRMIME ? 'dir' : 'file';
         $result['path'] = ($dirname ? ($dirname . '/') : '') . $id;
         $result['filename'] = $path_parts['filename'];
+        $result['webViewLink'] = $object['webViewLink'];
         $result['extension'] = $path_parts['extension'];
         $result['timestamp'] = strtotime($object->getModifiedTime());
         if ($result['type'] === 'file') {
@@ -838,14 +794,6 @@ class GoogleDriveAdapter extends AbstractAdapter
             $result['size'] = 0;
             if ($this->useHasDir) {
                 $result['hasdir'] = isset($this->cacheHasDirs[$id]) ? $this->cacheHasDirs[$id] : false;
-            }
-        }
-        // attach additional fields
-        if ($this->additionalFields) {
-            foreach($this->additionalFields as $field) {
-                if (property_exists($object, $field)) {
-                    $result[$field] = $object->$field;
-                }
             }
         }
         return $result;
@@ -870,7 +818,7 @@ class GoogleDriveAdapter extends AbstractAdapter
         $results = [];
         $parameters = [
             'pageSize' => $maxResults ?: 1000,
-            'fields' => $this->fetchfieldsList,
+            'fields' => self::FETCHFIELDS_LIST,
             'spaces' => $this->spaces,
             'q' => sprintf('trashed = false and "%s" in parents', $itemId)
         ];
@@ -947,7 +895,7 @@ class GoogleDriveAdapter extends AbstractAdapter
         $batch = $service->createBatch();
 
         $opts = [
-            'fields' => $this->fetchfieldsGet
+            'fields' => self::FETCHFIELDS_GET
         ];
 
         $batch->add($this->service->files->get($itemId, $opts), 'obj');
@@ -1020,7 +968,7 @@ class GoogleDriveAdapter extends AbstractAdapter
         $file->setMimeType(self::DIRMIME);
 
         $obj = $this->service->files->create($file, [
-            'fields' => $this->fetchfieldsGet
+            'fields' => self::FETCHFIELDS_GET
         ]);
 
         return ($obj instanceof Google_Service_Drive_DriveFile) ? $obj : false;
@@ -1089,11 +1037,11 @@ class GoogleDriveAdapter extends AbstractAdapter
             $client->setDefer(true);
             if ($mode === 'insert') {
                 $request = $this->service->files->create($file, [
-                    'fields' => $this->fetchfieldsGet
+                    'fields' => self::FETCHFIELDS_GET
                 ]);
             } else {
                 $request = $this->service->files->update($srcFile->getId(), $file, [
-                    'fields' => $this->fetchfieldsGet
+                    'fields' => self::FETCHFIELDS_GET
                 ]);
             }
 
@@ -1122,7 +1070,7 @@ class GoogleDriveAdapter extends AbstractAdapter
             $params = [
                 'data' => $contents,
                 'uploadType' => 'media',
-                'fields' => $this->fetchfieldsGet
+                'fields' => self::FETCHFIELDS_GET
             ];
             if ($mode === 'insert') {
                 $obj = $this->service->files->create($file, $params);
